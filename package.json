@@ -1,0 +1,45 @@
+{
+  "name": "@openimis/fe-biometric-verification",
+  "version": "0.1.0",
+  "description": "openIMIS Biometric Verification frontend module — public kiosk face verification page",
+  "license": "LGPL-3.0",
+  "repository": "git://github.com/openimis/openimis-fe-biometric-verification_js.git",
+  "main": "dist/index.js",
+  "module": "dist/index.es.js",
+  "engines": {
+    "node": ">=16",
+    "npm": ">=8"
+  },
+  "scripts": {
+    "build": "rollup -c",
+    "start": "rollup -c -w",
+    "prepare": "npm run build"
+  },
+  "peerDependencies": {
+    "@openimis/fe-core": "*",
+    "@material-ui/core": "^4.12.0",
+    "@material-ui/styles": "^4.11.0",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2",
+    "react-intl": "^5.8.1",
+    "react-helmet": "*"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.8.4",
+    "@babel/core": "^7.9.6",
+    "@babel/plugin-proposal-class-properties": "^7.8.3",
+    "@babel/plugin-transform-runtime": "^7.9.6",
+    "@babel/preset-env": "^7.9.6",
+    "@babel/preset-react": "^7.9.4",
+    "@babel/runtime": "^7.9.6",
+    "@rollup/plugin-babel": "^5.0.0",
+    "@rollup/plugin-commonjs": "^11.1.0",
+    "@rollup/plugin-json": "^4.0.3",
+    "@rollup/plugin-node-resolve": "^7.1.3",
+    "rollup": "^2.10.0"
+  },
+  "files": [
+    "dist",
+    "src"
+  ]
+}
