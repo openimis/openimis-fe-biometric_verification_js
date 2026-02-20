@@ -18,12 +18,15 @@ No login is required to reach this page.
 ```
 openimis-fe-biometric_verification_js/
 ├── src/
-│   ├── index.js                   # Module entry-point & openIMIS contribution
+│   ├── index.js                    # Module entry-point & openIMIS contribution
 │   └── pages/
-│       └── BiometricVerifyPage.js # The single public page
-├── rollup.config.js               # Build config (ESM + CJS outputs)
-└── package.json                   # @openimis/fe-biometric-verification
+│       └── BiometricVerifyPage.jsx # The single public page (must be .jsx for esbuild)
+├── vite.config.js                  # Build config (ESM + CJS outputs, library mode)
+└── package.json                    # @openimis/fe-biometric-verification
 ```
+
+> **Important:** the page component must keep the `.jsx` extension. Vite/esbuild only enables JSX
+> parsing for files with `.jsx` (or `.tsx`) extensions — using `.js` causes a parse error at build time.
 
 ---
 
@@ -31,15 +34,15 @@ openimis-fe-biometric_verification_js/
 
 | Concern | Choice |
 |---|---|
-| UI framework | React 17 |
-| Component library | Material-UI v4 (`@material-ui/core`, `@material-ui/styles`) |
-| Styling | `makeStyles` (JSS) |
+| UI framework | React 18 |
+| Component library | MUI v7 (`@mui/material`) + legacy JSS (`@mui/styles`) |
+| Styling | `makeStyles` from `@mui/styles` |
 | API calls | `useGraphqlMutation` from `@openimis/fe-core` |
-| i18n | `react-intl` v5 (via fe-core) |
+| i18n | `react-intl` v6 (via fe-core) |
 | Build | Vite 5 (library mode) — outputs `dist/index.es.js` (ESM) and `dist/index.js` (CJS) |
 | Runtime | Node ≥ 16, npm ≥ 8 |
 
-All `@openimis/*`, `@material-ui/*`, and `react*` packages are **peer dependencies** and must not be bundled.
+All `@openimis/*`, `@mui/*`, and `react*` packages are **peer dependencies** and must not be bundled.
 
 ---
 
@@ -61,25 +64,55 @@ This tells `openimis-fe-core`'s `App.js` to mount `BiometricVerifyPage` at `/bio
 
 | Path | Component | Auth required |
 |---|---|---|
-| `/biometric/verify` | `BiometricVerifyPage` | No |
+| `/biometric/verify/:uuid?` | `BiometricVerifyPage` | No |
+
+The `:uuid` parameter is optional. When provided (e.g. `/front/biometric/verify/abc-123-def`), the insuree UUID field is pre-filled. This enables QR-code or deep-link workflows where the kiosk receives a direct URL with the insuree identifier embedded.
 
 ---
 
 ## BiometricVerifyPage — behaviour
 
-1. On mount, calls `navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })` and attaches the stream to a `<video>` element. The preview is mirrored (`transform: scaleX(-1)`) so it feels natural to the subject.
-2. The user types (or a barcode scanner pastes) the insuree UUID into a text field.
-3. On "Verify" click:
-   - A hidden `<canvas>` (640 × 640 px) captures the current video frame, also mirrored so the stored image is non-mirrored.
-   - The canvas is serialised to a base-64 JPEG (`quality 0.92`).
-   - The GraphQL mutation below is fired via `useGraphqlMutation`.
-4. The result panel shows one of three states: **verified** (green), **rejected** (red), or **error** (grey).
+### Page layout
+
+The page uses a **two-column layout**:
+
+- **Left panel** (dark teal `#006273`): Explanatory section describing the purpose of the verification system — confirms beneficiary identity and liveness to ensure they can receive their benefit package. Includes the openIMIS logo (white-filtered) and feature icons.
+- **Right panel** (white): Camera preview, insuree UUID input field (pre-filled from URL if available), and verification controls.
+
+### Verification workflow
+
+1. **On mount**: Calls `navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })` and attaches the stream to a `<video>` element. The preview is mirrored (`transform: scaleX(-1)`) so it feels natural to the subject.
+2. **Pre-fill UUID**: If a `:uuid` parameter is present in the URL, the insuree UUID field is automatically pre-filled. Otherwise, the user types (or a barcode scanner pastes) the insuree UUID.
+3. **Start verification** (button click):
+   - **Immediate first capture**: A hidden `<canvas>` (640 × 640 px) captures the current video frame (mirrored), serialises it to base-64 JPEG (`quality 0.92`), and sends it via the GraphQL mutation.
+   - **Auto-repeat every 15 seconds**: A `setInterval` fires every 15 seconds, capturing and sending a new frame automatically.
+   - The UUID input is **disabled** during verification to prevent changes mid-session.
+   - A **"Stop Verification"** button (red) appears, allowing the user to halt the periodic captures.
+4. **Results**: Each verification displays one of three states:
+   - **Verified** (green border + light green background + CheckCircle icon)
+   - **Rejected** (red border + light red background + Cancel icon)
+   - **Error** (grey border + white background + Cancel icon)
+   - The total number of captures is displayed in the result panel.
+
+### Visual design
+
+The page uses **openIMIS branding** and follows the standard color palette:
+
+- **Page background**: `#dbeef0` (light teal — openIMIS `backgroundColor`)
+- **Left panel background**: `#006273` (dark teal — openIMIS `primaryColor`)
+- **Primary**: `#006273` — used for buttons, camera border, titles
+- **Error**: `#801a00` (openIMIS `errorColor`) — used for "Stop" button
+- **Text**: `#003d4a` (dark blue — openIMIS `fontColor`)
+- **Borders/inputs**: `#b7d4d8` (medium teal — openIMIS `headerColor`)
+- **Font**: Rubik / Roboto (matches openIMIS typography)
+
+The **openIMIS logo** is displayed in the left panel (white-filtered). Material-UI icons (`CheckCircleIcon`, `CancelIcon`, `VerifiedUserIcon`) illustrate features and results.
 
 ### GraphQL mutation
 
 ```graphql
-mutation VerifyFace($uuid: String!, $frame: String!) {
-  verifyFace(insureeUuid: $uuid, frameB64: $frame) {
+mutation VerifyFace($input: VerifyFaceInput!) {
+  verifyFace(input: $input) {
     verified     # Boolean
     confidence   # Float — percentage (0–100)
     distance     # Float — raw similarity distance
@@ -89,7 +122,17 @@ mutation VerifyFace($uuid: String!, $frame: String!) {
 }
 ```
 
-The mutation is resolved by **`openimis-be-biometric-verification_py`** (Python/Django backend module, mounted as a local volume in the Docker compose setup).
+**Input type:**
+```graphql
+input VerifyFaceInput {
+  clientMutationId: String  # Optional - accepted in camelCase for useGraphqlMutation compatibility
+  client_mutation_id: String  # Optional - accepted in snake_case for openIMIS convention
+  uuid: String!  # Insuree UUID
+  frame: String!  # Base64-encoded JPEG
+}
+```
+
+The backend accepts **both** `clientMutationId` (camelCase) and `client_mutation_id` (snake_case) to support `useGraphqlMutation`'s automatic field injection while maintaining openIMIS conventions. The mutation is resolved by **`openimis-be-biometric-verification_py`** (Python/Django backend module, mounted as a local volume in the Docker compose setup).
 
 ---
 
@@ -120,7 +163,22 @@ The build is configured in `vite.config.js` using Vite's **library mode**.
 `@vitejs/plugin-react` handles JSX transformation via esbuild — no Babel config is needed.
 All peer dependencies are declared as Rollup externals inside the Vite config so they are never bundled.
 
-The built artefacts land in `dist/`. To use the module inside `openimis-fe_js`, add it to `package.json` as a local path dependency and register `BiometricVerificationModule` in the openIMIS configuration JSON.
+The built artefacts land in `dist/`. To use the module inside `openimis-fe_js`, add it to `openimis.json` as a local path dependency (`file:` reference) and register `BiometricVerificationModule` in the openIMIS module list.
+
+---
+
+## Integration into openimis-fe_js (dev container)
+
+In `openimis-dev.json` (inside `openimis-fe_js`), add an entry that points to this module's source directory:
+
+```json
+{
+  "name": "BiometricVerificationModule",
+  "npm": "@openimis/fe-biometric-verification@file:/path/to/openimis-fe-biometric_verification_js"
+}
+```
+
+`entrypoint-dev.js` rewrites `openimis-dev.json` with `file:` references for all cloned/local modules. `openimis-config-vite.js` reads the rewritten JSON and injects Vite `resolve.alias` entries pointing into the `src/` directory of each `file:` module, enabling hot-reload of sources without a prior `npm run build`.
 
 ---
 
@@ -131,3 +189,4 @@ The built artefacts land in `dist/`. To use the module inside `openimis-fe_js`, 
 - **Minimal dependencies** — only peer deps already shipped with `openimis-fe_js` should be used.
 - **Camera cleanup** — the `useEffect` must stop all media tracks on unmount to avoid leaving the camera LED on.
 - **Image orientation** — the canvas draw step un-mirrors the preview so the JPEG sent to the backend matches the orientation of the enrolled photo.
+- **`.jsx` extension** — always use `.jsx` (not `.js`) for files that contain JSX syntax. esbuild does not parse JSX in `.js` files.

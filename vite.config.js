@@ -22,6 +22,7 @@ export default defineConfig({
         /^react-intl(\/.*)?$/,
         /^react-helmet(\/.*)?$/,
         /^@openimis\/.*/,
+        /^@mui\/.*/,
         /^@material-ui\/.*/,
         "prop-types",
       ],
