@@ -108,11 +108,40 @@ The page uses **openIMIS branding** and follows the standard color palette:
 
 The **openIMIS logo** is displayed in the left panel (white-filtered). Material-UI icons (`CheckCircleIcon`, `CancelIcon`, `VerifiedUserIcon`) illustrate features and results.
 
-### GraphQL mutation
+### GraphQL API
+
+#### Mutation: verifyFace
+
+Initiates biometric verification and returns a mutation log ID. The actual result is fetched via query.
 
 ```graphql
 mutation VerifyFace($input: VerifyFaceInput!) {
   verifyFace(input: $input) {
+    internalId         # Mutation log ID
+    clientMutationId   # Client-provided correlation ID
+  }
+}
+```
+
+**Input type:**
+```graphql
+input VerifyFaceInput {
+  client_mutation_label: String   # Optional - for audit logs
+  client_mutation_details: [String]  # Optional - additional metadata
+  uuid: String!  # Insuree UUID
+  frame: String!  # Base64-encoded JPEG
+}
+```
+
+The mutation inherits from `OpenIMISMutation` which automatically handles `clientMutationId`, logging, and async execution. The verification result is stored in Django cache (5-minute TTL) indexed by `clientMutationId`.
+
+#### Query: verificationResult
+
+Fetches the verification result by client mutation ID.
+
+```graphql
+query VerificationResult($clientMutationId: String!) {
+  verificationResult(clientMutationId: $clientMutationId) {
     verified     # Boolean
     confidence   # Float — percentage (0–100)
     distance     # Float — raw similarity distance
@@ -122,17 +151,12 @@ mutation VerifyFace($input: VerifyFaceInput!) {
 }
 ```
 
-**Input type:**
-```graphql
-input VerifyFaceInput {
-  clientMutationId: String  # Optional - accepted in camelCase for useGraphqlMutation compatibility
-  client_mutation_id: String  # Optional - accepted in snake_case for openIMIS convention
-  uuid: String!  # Insuree UUID
-  frame: String!  # Base64-encoded JPEG
-}
-```
+**Frontend workflow:**
+1. Call `verifyFace` mutation → receive `clientMutationId`
+2. Poll `verificationResult` query every 500ms (max 20 attempts / 10 seconds)
+3. Display result when received
 
-The backend accepts **both** `clientMutationId` (camelCase) and `client_mutation_id` (snake_case) to support `useGraphqlMutation`'s automatic field injection while maintaining openIMIS conventions. The mutation is resolved by **`openimis-be-biometric-verification_py`** (Python/Django backend module, mounted as a local volume in the Docker compose setup).
+The mutation is resolved by **`openimis-be-biometric-verification_py`** (Python/Django backend module, mounted as a local volume in the Docker compose setup).
 
 ---
 

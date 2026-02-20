@@ -185,6 +185,15 @@ const useStyles = makeStyles((theme) => ({
 const VERIFY_MUTATION = `
   mutation VerifyFace($input: VerifyFaceInput!) {
     verifyFace(input: $input) {
+      internal_id
+      clientMutationId
+    }
+  }
+`;
+
+const RESULT_QUERY = `
+  query VerificationResult($clientMutationId: String!) {
+    verificationResult(clientMutationId: $clientMutationId) {
       verified
       confidence
       distance
@@ -242,17 +251,67 @@ const BiometricVerifyPage = () => {
     return canvas.toDataURL("image/jpeg", 0.92);
   };
 
+  // ── Fetch result from backend ─────────────────────────────────────────
+  const fetchResult = async (clientMutationId) => {
+    try {
+      const response = await fetch("/api/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: RESULT_QUERY,
+          variables: { clientMutationId },
+        }),
+      });
+      const json = await response.json();
+      return json?.data?.verificationResult || null;
+    } catch (err) {
+      return null;
+    }
+  };
+
   // ── Single Verify ──────────────────────────────────────────────────────
   const performVerification = async () => {
     setResult(null);
     const frame = captureFrame();
     try {
+      // Step 1: Call mutation to start verification
       const resp = await mutate({ uuid: insureeUuid, frame });
-      const data = resp?.data?.verifyFace;
-      if (!data) throw new Error("Empty response from server.");
-      setResult(data);
-      setCaptureCount((prev) => prev + 1);
-      return data;
+      const mutationData = resp?.data?.verifyFace;
+      if (!mutationData?.clientMutationId) {
+        throw new Error("No clientMutationId returned from mutation.");
+      }
+
+      const clientMutationId = mutationData.clientMutationId;
+
+      // Step 2: Poll for result every 500ms, max 20 attempts (10 seconds)
+      let attempts = 0;
+      const maxAttempts = 20;
+
+      const pollResult = async () => {
+        const result = await fetchResult(clientMutationId);
+        if (result && (result.verified !== undefined || result.error)) {
+          // Got a result
+          setResult(result);
+          setCaptureCount((prev) => prev + 1);
+          return result;
+        }
+
+        attempts += 1;
+        if (attempts >= maxAttempts) {
+          const timeoutResult = {
+            verified: false,
+            error: "Verification timeout. Please try again.",
+          };
+          setResult(timeoutResult);
+          return timeoutResult;
+        }
+
+        // Wait 500ms and try again
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return pollResult();
+      };
+
+      return await pollResult();
     } catch (err) {
       const errorResult = { verified: false, error: err.message };
       setResult(errorResult);
