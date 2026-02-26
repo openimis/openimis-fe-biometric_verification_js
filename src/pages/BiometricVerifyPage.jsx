@@ -3,7 +3,6 @@ import { useParams } from "react-router-dom";
 import { makeStyles } from "@mui/styles";
 import { Button, CircularProgress, Paper, TextField, Typography, Box, Grid } from "@mui/material";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
-import { useGraphqlMutation } from "@openimis/fe-core";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import VerifiedUserIcon from "@mui/icons-material/VerifiedUser";
@@ -180,34 +179,41 @@ const useStyles = makeStyles((theme) => ({
     marginTop: 16,
     fontWeight: 500,
   },
+  connectionStatus: {
+    fontSize: "0.75rem",
+    padding: "4px 12px",
+    borderRadius: 12,
+    fontWeight: 500,
+    marginBottom: 16,
+  },
+  connected: {
+    background: "#d1f4dd",
+    color: "#0d7a2c",
+  },
+  disconnected: {
+    background: "#ffd6d6",
+    color: "#801a00",
+  },
+  connecting: {
+    background: "#fff4e5",
+    color: "#e65100",
+  },
 }));
 
-const VERIFY_MUTATION = `
-  mutation VerifyFace($input: VerifyFaceInput!) {
-    verifyFace(input: $input) {
-      internal_id
-      clientMutationId
-    }
-  }
-`;
-
-const RESULT_QUERY = `
-  query VerificationResult($clientMutationId: String!) {
-    verificationResult(clientMutationId: $clientMutationId) {
-      verified
-      confidence
-      distance
-      provider
-      error
-    }
-  }
-`;
+// WebSocket URL - adjust based on your deployment
+const getWebSocketUrl = () => {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const host = window.location.hostname;
+  const port = window.location.port || (protocol === "wss:" ? "443" : "80");
+  return `${protocol}//${host}:${port}/api/ws/biometric/verify/`;
+};
 
 const BiometricVerifyPage = () => {
   const classes = useStyles();
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const intervalRef = useRef(null);
+  const wsRef = useRef(null);
+  const streamIntervalRef = useRef(null);
   const { uuid } = useParams(); // Read insuree UUID from URL parameter
 
   const [insureeUuid, setInsureeUuid] = useState(uuid || "");
@@ -215,9 +221,9 @@ const BiometricVerifyPage = () => {
   const [cameraError, setCameraError] = useState(null);
   const [result, setResult] = useState(null); // { verified, confidence, distance, provider, error }
   const [isVerifying, setIsVerifying] = useState(false); // Auto-verify in progress
-  const [captureCount, setCaptureCount] = useState(0);
-
-  const { isLoading, mutate } = useGraphqlMutation(VERIFY_MUTATION, { wait: false });
+  const [verificationCount, setVerificationCount] = useState(0);
+  const [frameCount, setFrameCount] = useState(0);
+  const [wsStatus, setWsStatus] = useState("disconnected"); // "disconnected" | "connecting" | "connected"
 
   // ── Camera ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -238,7 +244,71 @@ const BiometricVerifyPage = () => {
     };
   }, []);
 
-  // ── Capture ────────────────────────────────────────────────────────────
+  // ── WebSocket Connection ───────────────────────────────────────────────
+  const connectWebSocket = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      return; // Already connected
+    }
+
+    setWsStatus("connecting");
+    const ws = new WebSocket(getWebSocketUrl());
+
+    ws.onopen = () => {
+      console.log("WebSocket connected");
+      setWsStatus("connected");
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log("WebSocket message:", data);
+
+        if (data.type === "connected") {
+          console.log(`Connected - sampling interval: ${data.sampling_interval}s`);
+        } else if (data.type === "verification_result") {
+          // Update result
+          setResult({
+            verified: data.verified,
+            confidence: data.confidence,
+            distance: data.distance,
+            provider: data.provider,
+            error: data.error,
+          });
+          setVerificationCount(data.verification_count || 0);
+          setFrameCount(data.frame_count || 0);
+        } else if (data.type === "error") {
+          console.error("WebSocket error:", data.message);
+          setResult({ verified: false, error: data.message });
+        }
+      } catch (err) {
+        console.error("Failed to parse WebSocket message:", err);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+      setWsStatus("disconnected");
+      setCameraError("WebSocket connection error");
+    };
+
+    ws.onclose = () => {
+      console.log("WebSocket disconnected");
+      setWsStatus("disconnected");
+      stopStreaming();
+    };
+
+    wsRef.current = ws;
+  };
+
+  const disconnectWebSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setWsStatus("disconnected");
+  };
+
+  // ── Capture Frame ──────────────────────────────────────────────────────
   const captureFrame = () => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
@@ -251,104 +321,84 @@ const BiometricVerifyPage = () => {
     return canvas.toDataURL("image/jpeg", 0.92);
   };
 
-  // ── Fetch result from backend ─────────────────────────────────────────
-  const fetchResult = async (clientMutationId) => {
-    try {
-      const response = await fetch("/api/graphql", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: RESULT_QUERY,
-          variables: { clientMutationId },
-        }),
-      });
-      const json = await response.json();
-      return json?.data?.verificationResult || null;
-    } catch (err) {
-      return null;
+  // ── Send Frame via WebSocket ───────────────────────────────────────────
+  const sendFrame = () => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      console.warn("WebSocket not connected, cannot send frame");
+      return;
     }
-  };
 
-  // ── Single Verify ──────────────────────────────────────────────────────
-  const performVerification = async () => {
-    setResult(null);
     const frame = captureFrame();
-    try {
-      // Step 1: Call mutation to start verification
-      const resp = await mutate({ uuid: insureeUuid, frame });
-      const mutationData = resp?.data?.verifyFace;
-      if (!mutationData?.clientMutationId) {
-        throw new Error("No clientMutationId returned from mutation.");
-      }
+    const message = {
+      type: "frame",
+      insuree_uuid: insureeUuid,
+      frame: frame,
+    };
 
-      const clientMutationId = mutationData.clientMutationId;
+    wsRef.current.send(JSON.stringify(message));
+  };
 
-      // Step 2: Poll for result every 500ms, max 20 attempts (10 seconds)
-      let attempts = 0;
-      const maxAttempts = 20;
+  // ── Start Streaming ────────────────────────────────────────────────────
+  const startStreaming = () => {
+    // Send frames at 5 fps (backend samples every 5 seconds)
+    const FPS = 5;
+    const interval = 1000 / FPS;
 
-      const pollResult = async () => {
-        const result = await fetchResult(clientMutationId);
-        if (result && (result.verified !== undefined || result.error)) {
-          // Got a result
-          setResult(result);
-          setCaptureCount((prev) => prev + 1);
-          return result;
-        }
+    streamIntervalRef.current = setInterval(() => {
+      sendFrame();
+    }, interval);
+  };
 
-        attempts += 1;
-        if (attempts >= maxAttempts) {
-          const timeoutResult = {
-            verified: false,
-            error: "Verification timeout. Please try again.",
-          };
-          setResult(timeoutResult);
-          return timeoutResult;
-        }
-
-        // Wait 500ms and try again
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return pollResult();
-      };
-
-      return await pollResult();
-    } catch (err) {
-      const errorResult = { verified: false, error: err.message };
-      setResult(errorResult);
-      return errorResult;
+  // ── Stop Streaming ─────────────────────────────────────────────────────
+  const stopStreaming = () => {
+    if (streamIntervalRef.current) {
+      clearInterval(streamIntervalRef.current);
+      streamIntervalRef.current = null;
     }
   };
 
-  // ── Start Auto Verification ────────────────────────────────────────────
-  const handleStartVerification = async () => {
-    setIsVerifying(true);
-    setCaptureCount(0);
-    setResult(null);
+  // ── Start Verification ─────────────────────────────────────────────────
+  const handleStartVerification = () => {
+    if (!insureeUuid.trim()) {
+      alert("Please enter an Insuree UUID");
+      return;
+    }
 
-    // First immediate capture
-    await performVerification();
-
-    // Then every 15 seconds
-    intervalRef.current = setInterval(async () => {
-      await performVerification();
-    }, 15000);
+    // Connect WebSocket if not connected
+    if (wsStatus !== "connected") {
+      connectWebSocket();
+      // Wait for connection before starting
+      setTimeout(() => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          setIsVerifying(true);
+          setVerificationCount(0);
+          setFrameCount(0);
+          setResult(null);
+          startStreaming();
+        } else {
+          alert("WebSocket connection failed. Please try again.");
+        }
+      }, 1000);
+    } else {
+      setIsVerifying(true);
+      setVerificationCount(0);
+      setFrameCount(0);
+      setResult(null);
+      startStreaming();
+    }
   };
 
-  // ── Stop Auto Verification ─────────────────────────────────────────────
+  // ── Stop Verification ──────────────────────────────────────────────────
   const handleStopVerification = () => {
     setIsVerifying(false);
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    stopStreaming();
   };
 
-  // ── Cleanup interval on unmount ────────────────────────────────────────
+  // ── Cleanup on unmount ─────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+      stopStreaming();
+      disconnectWebSocket();
     };
   }, []);
 
@@ -361,132 +411,152 @@ const BiometricVerifyPage = () => {
 
   const canVerify = cameraReady && insureeUuid.trim().length > 0 && !isVerifying;
 
+  // Connection status badge
+  const getConnectionStatusClass = () => {
+    if (wsStatus === "connected") return classes.connected;
+    if (wsStatus === "connecting") return classes.connecting;
+    return classes.disconnected;
+  };
+
+  const getConnectionStatusText = () => {
+    if (wsStatus === "connected") return "● Connected";
+    if (wsStatus === "connecting") return "● Connecting...";
+    return "● Disconnected";
+  };
+
   return (
     <ThemeProvider theme={theme}>
       <div className={classes.root}>
         <Box className={classes.wrapper}>
           <Grid container spacing={0} sx={{ display: 'flex', flexWrap: 'wrap' }}>
-        {/* Left Panel - Explanatory Section */}
-        <Grid item xs={12} md={5} className={classes.leftPanel}>
-          <img src="/front/src/openIMIS.png" alt="openIMIS" className={classes.logo} />
-          <Typography className={classes.leftTitle}>
-            Beneficiary Identity Verification
-          </Typography>
-          <Typography className={classes.leftText}>
-            This page is designed to verify the identity of beneficiaries to confirm that they are
-            alive and eligible to receive their designated benefit package.
-          </Typography>
-          <Typography className={classes.leftText}>
-            The system uses biometric facial recognition to perform a liveness check and identity
-            match against the enrolled reference photo. This process ensures that benefits are
-            delivered to the correct individual and helps prevent fraud.
-          </Typography>
-
-          <Box className={classes.iconFeature}>
-            <VerifiedUserIcon />
-            <Typography>Secure biometric verification</Typography>
-          </Box>
-          <Box className={classes.iconFeature}>
-            <CheckCircleIcon />
-            <Typography>Real-time liveness detection</Typography>
-          </Box>
-        </Grid>
-
-        {/* Right Panel - Camera & Verification */}
-        <Grid item xs={12} md={7} className={classes.rightPanel}>
-          <Typography className={classes.title}>Verification Process</Typography>
-
-          <div className={classes.cameraWrap}>
-            <video ref={videoRef} className={classes.video} autoPlay playsInline muted />
-          </div>
-
-          {/* Hidden canvas for frame capture */}
-          <canvas ref={canvasRef} width={640} height={640} style={{ display: "none" }} />
-
-          {cameraError && (
-            <Typography style={{ color: "#801a00", marginBottom: 16, textAlign: "center" }}>
-              {cameraError}
-            </Typography>
-          )}
-
-          <TextField
-            className={classes.input}
-            variant="outlined"
-            label="Insuree UUID"
-            value={insureeUuid}
-            onChange={(e) => setInsureeUuid(e.target.value)}
-            inputProps={{ autoComplete: "off", spellCheck: false }}
-            disabled={isVerifying}
-            size="medium"
-          />
-
-          <Box className={classes.buttonGroup}>
-            {!isVerifying ? (
-              <Button
-                className={classes.button}
-                variant="contained"
-                disabled={!canVerify}
-                onClick={handleStartVerification}
-              >
-                {isLoading ? (
-                  <CircularProgress size={22} style={{ color: "#fff" }} />
-                ) : (
-                  "Start Verification"
-                )}
-              </Button>
-            ) : (
-              <Button
-                className={classes.stopButton}
-                variant="contained"
-                onClick={handleStopVerification}
-              >
-                Stop Verification
-              </Button>
-            )}
-          </Box>
-
-          {isVerifying && (
-            <Typography className={classes.status}>
-              Verification in progress... (Capture #{captureCount + 1})
-            </Typography>
-          )}
-
-          {result && (
-            <Paper className={`${classes.result} ${resultClass()}`} elevation={0}>
-              <Typography variant="h6" style={{ fontWeight: 600, marginBottom: 8 }}>
-                {result.error ? (
-                  <>
-                    <CancelIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
-                    Error
-                  </>
-                ) : result.verified ? (
-                  <>
-                    <CheckCircleIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
-                    Identity Verified
-                  </>
-                ) : (
-                  <>
-                    <CancelIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
-                    Identity Not Verified
-                  </>
-                )}
+            {/* Left Panel - Explanatory Section */}
+            <Grid item xs={12} md={5} className={classes.leftPanel}>
+              <img src="/front/src/openIMIS.png" alt="openIMIS" className={classes.logo} />
+              <Typography className={classes.leftTitle}>
+                Beneficiary Identity Verification
               </Typography>
-              {result.error && (
-                <Typography className={classes.detail}>{result.error}</Typography>
-              )}
-              {!result.error && result.confidence != null && (
-                <Typography className={classes.detail}>
-                  Confidence: {result.confidence.toFixed(1)}% · Provider: {result.provider}
-                  <br />
-                  Total captures: {captureCount}
+              <Typography className={classes.leftText}>
+                This page is designed to verify the identity of beneficiaries to confirm that they are
+                alive and eligible to receive their designated benefit package.
+              </Typography>
+              <Typography className={classes.leftText}>
+                The system uses biometric facial recognition to perform a liveness check and identity
+                match against the enrolled reference photo. This process ensures that benefits are
+                delivered to the correct individual and helps prevent fraud.
+              </Typography>
+
+              <Box className={classes.iconFeature}>
+                <VerifiedUserIcon />
+                <Typography>Secure biometric verification</Typography>
+              </Box>
+              <Box className={classes.iconFeature}>
+                <CheckCircleIcon />
+                <Typography>Real-time streaming verification</Typography>
+              </Box>
+            </Grid>
+
+            {/* Right Panel - Camera & Verification */}
+            <Grid item xs={12} md={7} className={classes.rightPanel}>
+              <Typography className={classes.title}>Verification Process</Typography>
+
+              {/* WebSocket Connection Status */}
+              <Box className={`${classes.connectionStatus} ${getConnectionStatusClass()}`}>
+                {getConnectionStatusText()}
+              </Box>
+
+              <div className={classes.cameraWrap}>
+                <video ref={videoRef} className={classes.video} autoPlay playsInline muted />
+              </div>
+
+              {/* Hidden canvas for frame capture */}
+              <canvas ref={canvasRef} width={640} height={640} style={{ display: "none" }} />
+
+              {cameraError && (
+                <Typography style={{ color: "#801a00", marginBottom: 16, textAlign: "center" }}>
+                  {cameraError}
                 </Typography>
               )}
-            </Paper>
-          )}
-        </Grid>
-        </Grid>
-      </Box>
-    </div>
+
+              <TextField
+                className={classes.input}
+                variant="outlined"
+                label="Insuree UUID"
+                value={insureeUuid}
+                onChange={(e) => setInsureeUuid(e.target.value)}
+                inputProps={{ autoComplete: "off", spellCheck: false }}
+                disabled={isVerifying}
+                size="medium"
+              />
+
+              <Box className={classes.buttonGroup}>
+                {!isVerifying ? (
+                  <Button
+                    className={classes.button}
+                    variant="contained"
+                    disabled={!canVerify}
+                    onClick={handleStartVerification}
+                  >
+                    {wsStatus === "connecting" ? (
+                      <CircularProgress size={22} style={{ color: "#fff" }} />
+                    ) : (
+                      "Start Verification"
+                    )}
+                  </Button>
+                ) : (
+                  <Button
+                    className={classes.stopButton}
+                    variant="contained"
+                    onClick={handleStopVerification}
+                  >
+                    Stop Verification
+                  </Button>
+                )}
+              </Box>
+
+              {isVerifying && (
+                <Typography className={classes.status}>
+                  Streaming verification...
+                  <br />
+                  Frames sent: {frameCount} · Verifications: {verificationCount}
+                </Typography>
+              )}
+
+              {result && (
+                <Paper className={`${classes.result} ${resultClass()}`} elevation={0}>
+                  <Typography variant="h6" style={{ fontWeight: 600, marginBottom: 8 }}>
+                    {result.error ? (
+                      <>
+                        <CancelIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
+                        Error
+                      </>
+                    ) : result.verified ? (
+                      <>
+                        <CheckCircleIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
+                        Identity Verified
+                      </>
+                    ) : (
+                      <>
+                        <CancelIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
+                        Identity Not Verified
+                      </>
+                    )}
+                  </Typography>
+                  {result.error && (
+                    <Typography className={classes.detail}>{result.error}</Typography>
+                  )}
+                  {!result.error && result.confidence != null && (
+                    <Typography className={classes.detail}>
+                      Confidence: {result.confidence.toFixed(1)}% · Provider: {result.provider}
+                      <br />
+                      Total verifications: {verificationCount}
+                    </Typography>
+                  )}
+                </Paper>
+              )}
+            </Grid>
+          </Grid>
+        </Box>
+      </div>
     </ThemeProvider>
   );
 };

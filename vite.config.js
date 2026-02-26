@@ -21,6 +21,8 @@ export default defineConfig({
         /^react-dom(\/.*)?$/,
         /^react-intl(\/.*)?$/,
         /^react-helmet(\/.*)?$/,
+        /^react-router(\/.*)?$/,
+        /^react-router-dom(\/.*)?$/,
         /^@openimis\/.*/,
         /^@mui\/.*/,
         /^@material-ui\/.*/,

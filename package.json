@@ -4,8 +4,8 @@
   "description": "openIMIS Biometric Verification frontend module — public kiosk face verification page",
   "license": "LGPL-3.0",
   "repository": "git://github.com/openimis/openimis-fe-biometric-verification_js.git",
-  "main": "dist/index.js",
-  "module": "dist/index.es.js",
+  "main": "src/index.js",
+  "module": "src/index.js",
   "engines": {
     "node": ">=16",
     "npm": ">=8"

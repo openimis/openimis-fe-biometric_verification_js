@@ -108,53 +108,31 @@ The page uses **openIMIS branding** and follows the standard color palette:
 
 The **openIMIS logo** is displayed in the left panel (white-filtered). Material-UI icons (`CheckCircleIcon`, `CancelIcon`, `VerifiedUserIcon`) illustrate features and results.
 
-### GraphQL API
+### GraphQL mutation
 
-#### Mutation: verifyFace
-
-Initiates biometric verification and returns a mutation log ID. The actual result is fetched via query.
+**Synchronous verification** — returns result immediately.
 
 ```graphql
-mutation VerifyFace($input: VerifyFaceInput!) {
-  verifyFace(input: $input) {
-    internalId         # Mutation log ID
-    clientMutationId   # Client-provided correlation ID
-  }
-}
-```
-
-**Input type:**
-```graphql
-input VerifyFaceInput {
-  client_mutation_label: String   # Optional - for audit logs
-  client_mutation_details: [String]  # Optional - additional metadata
-  uuid: String!  # Insuree UUID
-  frame: String!  # Base64-encoded JPEG
-}
-```
-
-The mutation inherits from `OpenIMISMutation` which automatically handles `clientMutationId`, logging, and async execution. The verification result is stored in Django cache (5-minute TTL) indexed by `clientMutationId`.
-
-#### Query: verificationResult
-
-Fetches the verification result by client mutation ID.
-
-```graphql
-query VerificationResult($clientMutationId: String!) {
-  verificationResult(clientMutationId: $clientMutationId) {
-    verified     # Boolean
+mutation VerifyFace($uuid: String!, $frame: String!) {
+  verifyFace(uuid: $uuid, frame: $frame) {
+    verified     # Boolean — true if face matches
     confidence   # Float — percentage (0–100)
     distance     # Float — raw similarity distance
     provider     # String — e.g. "deepface", "aws_rekognition"
-    error        # String | null
+    error        # String | null — error message if verification failed
   }
 }
 ```
 
-**Frontend workflow:**
-1. Call `verifyFace` mutation → receive `clientMutationId`
-2. Poll `verificationResult` query every 500ms (max 20 attempts / 10 seconds)
-3. Display result when received
+**Arguments:**
+- `uuid` (String!) — Insuree UUID
+- `frame` (String!) — Base64-encoded JPEG (with or without `data:image/jpeg;base64,` prefix)
+
+**Behavior:**
+- Executes **synchronously** — verification happens in real-time
+- Returns result immediately (no polling required)
+- Anonymous access allowed (whitelisted in `JWT_ALLOW_ANY_CLASSES`)
+- Authenticated users subject to permission checks if `gql_mutation_verify_face_perms` is configured
 
 The mutation is resolved by **`openimis-be-biometric-verification_py`** (Python/Django backend module, mounted as a local volume in the Docker compose setup).
 
