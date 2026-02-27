@@ -1,11 +1,13 @@
 import { useRef, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useLocation } from "react-router-dom";
 import { makeStyles } from "@mui/styles";
 import { Button, CircularProgress, Paper, TextField, Typography, Box, Grid } from "@mui/material";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import VerifiedUserIcon from "@mui/icons-material/VerifiedUser";
+import WarningIcon from "@mui/icons-material/Warning";
+import * as faceapi from "@vladmandic/face-api";
 
 const theme = createTheme();
 
@@ -107,7 +109,6 @@ const useStyles = makeStyles((theme) => ({
   },
   input: {
     width: "100%",
-    maxWidth: 400,
     marginBottom: 16,
     "& .MuiInputBase-root": { background: "#fff", color: "#003d4a" },
     "& .MuiInputLabel-root": { color: "#006273" },
@@ -126,7 +127,6 @@ const useStyles = makeStyles((theme) => ({
     display: "flex",
     gap: 12,
     width: "100%",
-    maxWidth: 400,
     marginBottom: 24,
   },
   button: {
@@ -148,7 +148,6 @@ const useStyles = makeStyles((theme) => ({
   },
   result: {
     width: "100%",
-    maxWidth: 400,
     padding: 20,
     borderRadius: 8,
     textAlign: "center",
@@ -198,6 +197,83 @@ const useStyles = makeStyles((theme) => ({
     background: "#fff4e5",
     color: "#e65100",
   },
+  qualityIndicators: {
+    width: "100%",
+    marginBottom: 16,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  columnsContainer: {
+    width: "100%",
+    marginTop: 16,
+    minHeight: 220,
+    marginBottom: 20,
+  },
+  gridContainer2:{
+    width: "45%"
+  },
+  columnBox: {
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 220,
+    padding: 12,
+    border: "1px solid #b7d4d8",
+    borderRadius: 8,
+    background: "#fff",
+  },
+  sectionTitle: {
+    fontSize: "0.9rem",
+    fontWeight: 600,
+    color: "#006273",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  qualityItem: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "8px 12px",
+    borderRadius: 8,
+    fontSize: "0.85rem",
+    fontWeight: 500,
+  },
+  qualityGood: {
+    background: "#d1f4dd",
+    color: "#0d7a2c",
+  },
+  qualityWarning: {
+    background: "#fff4e5",
+    color: "#e65100",
+  },
+  qualityBad: {
+    background: "#ffd6d6",
+    color: "#801a00",
+  },
+  readyIndicator: {
+    width: "100%",
+    maxWidth: 400,
+    padding: "12px 16px",
+    borderRadius: 8,
+    fontSize: "0.95rem",
+    fontWeight: 600,
+    textAlign: "center",
+    marginBottom: 16,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  ready: {
+    background: "#d1f4dd",
+    color: "#0d7a2c",
+    border: "2px solid #0d7a2c",
+  },
+  notReady: {
+    background: "#fff4e5",
+    color: "#e65100",
+    border: "2px solid #e65100",
+  },
 }));
 
 // WebSocket URL - adjust based on your deployment
@@ -215,8 +291,14 @@ const BiometricVerifyPage = () => {
   const wsRef = useRef(null);
   const streamIntervalRef = useRef(null);
   const { uuid } = useParams(); // Read insuree UUID from URL parameter
+  const location = useLocation();
+
+  // Extract query parameters using URLSearchParams (React Router v5)
+  const searchParams = new URLSearchParams(location.search);
+  const claimCodeFromUrl = searchParams.get("claimCode") || "";
 
   const [insureeUuid, setInsureeUuid] = useState(uuid || "");
+  const [claimCode, setClaimCode] = useState(claimCodeFromUrl);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState(null);
   const [result, setResult] = useState(null); // { verified, confidence, distance, provider, error }
@@ -224,6 +306,34 @@ const BiometricVerifyPage = () => {
   const [verificationCount, setVerificationCount] = useState(0);
   const [frameCount, setFrameCount] = useState(0);
   const [wsStatus, setWsStatus] = useState("disconnected"); // "disconnected" | "connecting" | "connected"
+
+  // Face detection state
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [faceQuality, setFaceQuality] = useState({
+    position: null, // "centered" | "left" | "right" | "top" | "bottom"
+    distance: null, // "good" | "too_close" | "too_far"
+    brightness: null, // "good" | "too_dark"
+  });
+  const detectionIntervalRef = useRef(null);
+  const [framesSkipped, setFramesSkipped] = useState(0);
+
+  // ── Load Face-API Models ───────────────────────────────────────────────
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        // Use CDN for model files - more portable and no need for local files
+        const MODEL_URL = "https://vladmandic.github.io/face-api/model";
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        setModelsLoaded(true);
+        console.log("TinyFaceDetector models loaded from CDN");
+      } catch (err) {
+        console.error("Failed to load face-api models:", err);
+        setCameraError("Failed to load face detection models");
+      }
+    };
+    loadModels();
+  }, []);
 
   // ── Camera ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -243,6 +353,99 @@ const BiometricVerifyPage = () => {
       if (stream) stream.getTracks().forEach((t) => t.stop());
     };
   }, []);
+
+  // ── Face Detection Loop ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!modelsLoaded || !cameraReady || !videoRef.current) {
+      return;
+    }
+
+    const detectFace = async () => {
+      try {
+        const video = videoRef.current;
+        if (!video || video.readyState !== 4) {
+          return;
+        }
+
+        // Detect face with TinyFaceDetector
+        const detection = await faceapi.detectSingleFace(
+          video,
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 })
+        );
+
+        if (detection) {
+          setFaceDetected(true);
+
+          // Analyze face quality
+          const box = detection.box;
+          const videoWidth = video.videoWidth;
+          const videoHeight = video.videoHeight;
+
+          // Position analysis
+          const centerX = box.x + box.width / 2;
+          const centerY = box.y + box.height / 2;
+          const videoCenterX = videoWidth / 2;
+          const videoCenterY = videoHeight / 2;
+
+          const offsetX = Math.abs(centerX - videoCenterX) / videoWidth;
+          const offsetY = Math.abs(centerY - videoCenterY) / videoHeight;
+
+          let position = "centered";
+          if (offsetX > 0.25) position = centerX < videoCenterX ? "left" : "right";
+          else if (offsetY > 0.2) position = centerY < videoCenterY ? "top" : "bottom";
+
+          // Distance analysis (based on face box size relative to frame)
+          const faceArea = box.width * box.height;
+          const videoArea = videoWidth * videoHeight;
+          const faceRatio = faceArea / videoArea;
+
+          let distance = "good";
+          if (faceRatio > 0.4) distance = "too_close";
+          else if (faceRatio < 0.08) distance = "too_far";
+
+          // Brightness analysis (sample pixels from face region)
+          const canvas = canvasRef.current;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          const imageData = ctx.getImageData(
+            (box.x / videoWidth) * canvas.width,
+            (box.y / videoHeight) * canvas.height,
+            (box.width / videoWidth) * canvas.width,
+            (box.height / videoHeight) * canvas.height
+          );
+
+          let totalBrightness = 0;
+          for (let i = 0; i < imageData.data.length; i += 4) {
+            const r = imageData.data[i];
+            const g = imageData.data[i + 1];
+            const b = imageData.data[i + 2];
+            totalBrightness += (r + g + b) / 3;
+          }
+          const avgBrightness = totalBrightness / (imageData.data.length / 4);
+
+          let brightness = "good";
+          if (avgBrightness < 60) brightness = "too_dark";
+
+          setFaceQuality({ position, distance, brightness });
+        } else {
+          setFaceDetected(false);
+          setFaceQuality({ position: null, distance: null, brightness: null });
+        }
+      } catch (err) {
+        console.error("Face detection error:", err);
+      }
+    };
+
+    // Run detection every 500ms
+    detectionIntervalRef.current = setInterval(detectFace, 500);
+
+    return () => {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+      }
+    };
+  }, [modelsLoaded, cameraReady]);
 
   // ── WebSocket Connection ───────────────────────────────────────────────
   const connectWebSocket = () => {
@@ -308,6 +511,16 @@ const BiometricVerifyPage = () => {
     setWsStatus("disconnected");
   };
 
+  // ── Check if face quality is good enough to send frame ────────────────
+  const isFaceQualityGood = () => {
+    return (
+      faceDetected &&
+      faceQuality.position === "centered" &&
+      faceQuality.distance === "good" &&
+      faceQuality.brightness === "good"
+    );
+  };
+
   // ── Capture Frame ──────────────────────────────────────────────────────
   const captureFrame = () => {
     const canvas = canvasRef.current;
@@ -328,11 +541,21 @@ const BiometricVerifyPage = () => {
       return;
     }
 
+    // Only send frame if face quality is good
+    if (!isFaceQualityGood()) {
+      setFramesSkipped((prev) => prev + 1);
+      console.debug("Skipping frame - face quality not good enough");
+      return;
+    }
+
     const frame = captureFrame();
     const message = {
       type: "frame",
       insuree_uuid: insureeUuid,
       frame: frame,
+      claim_code: claimCode || null,  // Include claim_code for audit trail
+      step_name: "verification",  // Default step name
+      device_id: navigator.userAgent,  // Browser user agent as device ID
     };
 
     wsRef.current.send(JSON.stringify(message));
@@ -373,6 +596,7 @@ const BiometricVerifyPage = () => {
           setIsVerifying(true);
           setVerificationCount(0);
           setFrameCount(0);
+          setFramesSkipped(0);
           setResult(null);
           startStreaming();
         } else {
@@ -383,6 +607,7 @@ const BiometricVerifyPage = () => {
       setIsVerifying(true);
       setVerificationCount(0);
       setFrameCount(0);
+      setFramesSkipped(0);
       setResult(null);
       startStreaming();
     }
@@ -468,6 +693,123 @@ const BiometricVerifyPage = () => {
                 <video ref={videoRef} className={classes.video} autoPlay playsInline muted />
               </div>
 
+              {/* Two columns below camera */}
+              <Grid container spacing={2} className={classes.columnsContainer}>
+                {/* Left Column: Video Quality Checks */}
+                <Grid item xs={12} sm={6} className={classes.gridContainer2} >
+                  <Box className={classes.columnBox}>
+                    <Typography className={classes.sectionTitle}>Video Quality</Typography>
+                    {cameraReady && modelsLoaded && (
+                      <Box className={classes.qualityIndicators}>
+                        {/* Face Detection */}
+                        <Box
+                          className={`${classes.qualityItem} ${
+                            faceDetected ? classes.qualityGood : classes.qualityBad
+                          }`}
+                        >
+                          <span>Face Detected</span>
+                          <span>{faceDetected ? "✓" : "✗"}</span>
+                        </Box>
+
+                        {/* Position */}
+                        {faceDetected && faceQuality.position && (
+                          <Box
+                            className={`${classes.qualityItem} ${
+                              faceQuality.position === "centered"
+                                ? classes.qualityGood
+                                : classes.qualityWarning
+                            }`}
+                          >
+                            <span>Position</span>
+                            <span>
+                              {faceQuality.position === "centered"
+                                ? "Centered ✓"
+                                : `Move ${faceQuality.position}`}
+                            </span>
+                          </Box>
+                        )}
+
+                        {/* Distance */}
+                        {faceDetected && faceQuality.distance && (
+                          <Box
+                            className={`${classes.qualityItem} ${
+                              faceQuality.distance === "good"
+                                ? classes.qualityGood
+                                : classes.qualityWarning
+                            }`}
+                          >
+                            <span>Distance</span>
+                            <span>
+                              {faceQuality.distance === "good"
+                                ? "Good ✓"
+                                : faceQuality.distance === "too_close"
+                                ? "Move back"
+                                : "Move closer"}
+                            </span>
+                          </Box>
+                        )}
+
+                        {/* Brightness */}
+                        {faceDetected && faceQuality.brightness && (
+                          <Box
+                            className={`${classes.qualityItem} ${
+                              faceQuality.brightness === "good"
+                                ? classes.qualityGood
+                                : classes.qualityWarning
+                            }`}
+                          >
+                            <span>Lighting</span>
+                            <span>
+                              {faceQuality.brightness === "good"
+                                ? "Good ✓"
+                                : "Too dark - add light"}
+                            </span>
+                          </Box>
+                        )}
+                      </Box>
+                    )}
+                  </Box>
+                </Grid>
+
+                {/* Right Column: Identity Verification */}
+                <Grid item xs={12} sm={6} className={classes.gridContainer2}>
+                  <Box className={classes.columnBox}>
+                    <Typography className={classes.sectionTitle}>Identity Verification</Typography>
+
+                    {/* Ready Indicator */}
+                    {cameraReady && modelsLoaded && isVerifying && (
+                      <Box
+                        className={`${classes.readyIndicator} ${
+                          isFaceQualityGood() ? classes.ready : classes.notReady
+                        }`}
+                        style={{ marginTop: 0 }}
+                      >
+                        {isFaceQualityGood() ? (
+                          <>
+                            <CheckCircleIcon fontSize="small" />
+                            <span>Ready</span>
+                          </>
+                        ) : (
+                          <>
+                            <WarningIcon fontSize="small" />
+                            <span>Waiting...</span>
+                          </>
+                        )}
+                      </Box>
+                    )}
+
+                    {/* Verification Stats */}
+                    {isVerifying && (
+                      <Box style={{ marginTop: 8, fontSize: "0.85rem", textAlign: "center", color: "#006273" }}>
+                        <div>Sent: {frameCount}</div>
+                        <div>Skipped: {framesSkipped}</div>
+                        <div>Verified: {verificationCount}</div>
+                      </Box>
+                    )}
+                  </Box>
+                </Grid>
+              </Grid>
+
               {/* Hidden canvas for frame capture */}
               <canvas ref={canvasRef} width={640} height={640} style={{ display: "none" }} />
 
@@ -512,14 +854,6 @@ const BiometricVerifyPage = () => {
                   </Button>
                 )}
               </Box>
-
-              {isVerifying && (
-                <Typography className={classes.status}>
-                  Streaming verification...
-                  <br />
-                  Frames sent: {frameCount} · Verifications: {verificationCount}
-                </Typography>
-              )}
 
               {result && (
                 <Paper className={`${classes.result} ${resultClass()}`} elevation={0}>

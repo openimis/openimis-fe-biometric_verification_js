@@ -37,7 +37,9 @@ openimis-fe-biometric_verification_js/
 | UI framework | React 18 |
 | Component library | MUI v7 (`@mui/material`) + legacy JSS (`@mui/styles`) |
 | Styling | `makeStyles` from `@mui/styles` |
-| API calls | `useGraphqlMutation` from `@openimis/fe-core` |
+| Face detection | `@vladmandic/face-api` (TinyFaceDetector) - models loaded from CDN |
+| WebSocket | Native WebSocket API for real-time streaming |
+| API calls | WebSocket for verification streaming |
 | i18n | `react-intl` v6 (via fe-core) |
 | Build | Vite 5 (library mode) — outputs `dist/index.es.js` (ESM) and `dist/index.js` (CJS) |
 | Runtime | Node ≥ 16, npm ≥ 8 |

@@ -15,6 +15,10 @@
     "start": "vite build --watch",
     "prepare": "npm run build"
   },
+  "dependencies": {
+    "@vladmandic/face-api": "^1.7.13",
+    "qrcode.react": "^4.1.0"
+  },
   "peerDependencies": {
     "@openimis/fe-core": "*",
     "@mui/material": "^7.0.0",

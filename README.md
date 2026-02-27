@@ -7,9 +7,14 @@ This module provides a **publicly accessible** biometric face verification page 
 ## Features
 
 - 🎥 Live camera preview with automatic frame capture
+- 🤖 **Client-side face detection** with quality checks (TinyFaceDetector)
+  - Real-time face presence detection
+  - Position guidance (centered, move left/right/up/down)
+  - Distance guidance (move closer/back)
+  - Lighting quality feedback (too dark warning)
+  - **Smart streaming**: Frames only sent to backend when all quality checks pass
+  - Visual "Ready to Verify" indicator when quality is optimal
 - 🔐 Face verification against enrolled reference photos
-- ⏰ Automatic periodic verification (every 15 seconds)
-- 🎨 Modern two-column layout with openIMIS branding
 - 📱 Responsive design (mobile and desktop)
 - 🚫 **No login required** - fully public access
 
@@ -21,35 +26,24 @@ This module provides a **publicly accessible** biometric face verification page 
 https://your-domain.com/front/biometric/verify
 ```
 
-### With pre-filled insuree UUID (for QR codes or deep links)
-
-```
-https://your-domain.com/front/biometric/verify/{insuree-uuid}
-```
-
-**Example:**
-```
-https://your-domain.com/front/biometric/verify/a1b2c3d4-e5f6-7890-abcd-ef1234567890
-```
-
-When a UUID is provided in the URL, the insuree UUID field is automatically pre-filled, making it ideal for:
-- QR code workflows
-- Deep linking from enrollment systems
-- Kiosk integrations with barcode scanners
-
 ## Usage Workflow
 
 1. **Open the page** at the public URL
 2. **Allow camera access** when prompted by the browser
 3. **Enter or scan the insuree UUID** (or use a pre-filled URL)
-4. **Click "Start Verification"** to begin automatic verification
-5. **View results** - The system displays:
+4. **Position your face** - Real-time quality indicators guide you:
+   - Face detection status
+   - Position alignment (centered/move left/right/up/down)
+   - Distance check (move closer/back)
+   - Lighting quality (too dark warning)
+5. **Click "Start Verification"** to begin streaming verification
+6. **View results** - The system displays:
    - ✅ **Verified** (green) - Identity confirmed
    - ❌ **Not Verified** (red) - Identity mismatch
    - ⚠️ **Error** (grey) - Technical issue
-6. **Stop verification** when done
+7. **Stop verification** when done
 
-The system automatically captures and verifies frames every 15 seconds while verification is active.
+The system continuously streams video frames via WebSocket, but only sends frames to the backend when all quality checks pass (face detected, centered, good distance, sufficient lighting). This smart streaming approach reduces bandwidth and improves verification accuracy.
 
 ## Integration
 
@@ -92,6 +86,51 @@ npm run build
 npm start
 ```
 
+### Face Detection Models Setup
+
+This module uses **TinyFaceDetector** from `@vladmandic/face-api` for client-side face quality checks.
+
+#### Model Loading
+
+The BiometricVerifyPage component automatically loads the models from the **vladmandic CDN** on mount:
+
+```javascript
+const MODEL_URL = "https://vladmandic.github.io/face-api/model";
+```
+
+**Advantages of CDN approach:**
+- ✅ No local files needed - fully portable module
+- ✅ Always up-to-date models
+- ✅ No CORS issues
+- ✅ Cached by browsers across sites
+
+Check the browser console for:
+```
+✓ TinyFaceDetector models loaded from CDN
+```
+
+#### Alternative: Self-hosted Models (Production)
+
+For production environments where external dependencies are not allowed, you can self-host the models:
+
+1. Download model files:
+```bash
+cd /path/to/your-cdn-directory
+wget https://raw.githubusercontent.com/vladmandic/face-api/master/model/tiny_face_detector_model-weights_manifest.json
+wget https://raw.githubusercontent.com/vladmandic/face-api/master/model/tiny_face_detector_model.bin
+```
+
+2. Update `MODEL_URL` in `BiometricVerifyPage.jsx`:
+```javascript
+const MODEL_URL = "https://your-cdn.example.com/models";
+```
+
+**Model files required:**
+- `tiny_face_detector_model-weights_manifest.json` (3KB)
+- `tiny_face_detector_model.bin` (189KB)
+
+Total size: ~192KB (very lightweight!)
+
 ## Technology Stack
 
 - **React 18** - UI framework
@@ -99,23 +138,41 @@ npm start
 - **@mui/styles** - Styling (makeStyles)
 - **Vite 5** - Build tool
 - **WebRTC** - Camera access via `navigator.mediaDevices.getUserMedia`
-- **GraphQL** - Backend communication
+- **@vladmandic/face-api** - Client-side face detection (TinyFaceDetector)
+- **WebSocket** - Real-time streaming communication with backend
 
-## GraphQL Mutation
+## WebSocket Protocol
 
-The page calls the `verifyFace` mutation:
+The page establishes a WebSocket connection to `/api/ws/biometric/verify/` for real-time verification:
 
-```graphql
-mutation VerifyFace($input: VerifyFaceInput!) {
-  verifyFace(input: $input) {
-    verified
-    confidence
-    distance
-    provider
-    error
-  }
+### Client → Server (Frame Submission)
+```json
+{
+  "type": "frame",
+  "insuree_uuid": "uuid-string",
+  "frame": "data:image/jpeg;base64,...",
+  "claim_code": "optional-claim-code",
+  "step_name": "verification",
+  "device_id": "browser-user-agent"
 }
 ```
+
+### Server → Client (Verification Result)
+```json
+{
+  "type": "verification_result",
+  "verified": true,
+  "confidence": 85.5,
+  "distance": 0.35,
+  "provider": "deepface",
+  "error": null,
+  "verification_count": 3,
+  "frame_count": 15,
+  "audit_uuid": "audit-record-uuid"
+}
+```
+
+**Backend Sampling:** The backend processes frames every 5 seconds (configurable) to reduce CPU load, even though the frontend sends frames continuously when quality is good.
 
 ## Security Considerations
 
@@ -159,4 +216,4 @@ LGPL-3.0
 
 ## Support
 
-For issues and questions, please refer to the main openIMIS documentation or contact your system administrator.
+For issues and questions, please refer to the main openIMIS documentation

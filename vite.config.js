@@ -27,6 +27,8 @@ export default defineConfig({
         /^@mui\/.*/,
         /^@material-ui\/.*/,
         "prop-types",
+        "@vladmandic/face-api",
+        "qrcode.react",
       ],
     },
 
