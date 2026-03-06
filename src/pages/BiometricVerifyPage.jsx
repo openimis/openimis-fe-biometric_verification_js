@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import { useParams, useLocation } from "react-router-dom";
 import { makeStyles } from "@mui/styles";
-import { Button, CircularProgress, Paper, TextField, Typography, Box, Grid } from "@mui/material";
+import { Button, CircularProgress, TextField, Typography, Box, Grid } from "@mui/material";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -304,7 +304,8 @@ const BiometricVerifyPage = () => {
   const [result, setResult] = useState(null); // { verified, confidence, distance, provider, error }
   const [isVerifying, setIsVerifying] = useState(false); // Auto-verify in progress
   const [verificationCount, setVerificationCount] = useState(0);
-  const [frameCount, setFrameCount] = useState(0);
+  const [framesSent, setFramesSent] = useState(0); // Frames actually sent to backend
+  const [framesSkippedQuality, setFramesSkippedQuality] = useState(0); // Skipped due to poor quality
   const [wsStatus, setWsStatus] = useState("disconnected"); // "disconnected" | "connecting" | "connected"
 
   // Face detection state
@@ -316,7 +317,6 @@ const BiometricVerifyPage = () => {
     brightness: null, // "good" | "too_dark"
   });
   const detectionIntervalRef = useRef(null);
-  const [framesSkipped, setFramesSkipped] = useState(0);
 
   // ── Load Face-API Models ───────────────────────────────────────────────
   useEffect(() => {
@@ -478,7 +478,6 @@ const BiometricVerifyPage = () => {
             error: data.error,
           });
           setVerificationCount(data.verification_count || 0);
-          setFrameCount(data.frame_count || 0);
         } else if (data.type === "error") {
           console.error("WebSocket error:", data.message);
           setResult({ verified: false, error: data.message });
@@ -543,7 +542,7 @@ const BiometricVerifyPage = () => {
 
     // Only send frame if face quality is good
     if (!isFaceQualityGood()) {
-      setFramesSkipped((prev) => prev + 1);
+      setFramesSkippedQuality((prev) => prev + 1);
       console.debug("Skipping frame - face quality not good enough");
       return;
     }
@@ -559,6 +558,8 @@ const BiometricVerifyPage = () => {
     };
 
     wsRef.current.send(JSON.stringify(message));
+    // Increment sent counter immediately when frame is sent
+    setFramesSent((prev) => prev + 1);
   };
 
   // ── Start Streaming ────────────────────────────────────────────────────
@@ -595,8 +596,8 @@ const BiometricVerifyPage = () => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           setIsVerifying(true);
           setVerificationCount(0);
-          setFrameCount(0);
-          setFramesSkipped(0);
+          setFramesSent(0);
+          setFramesSkippedQuality(0);
           setResult(null);
           startStreaming();
         } else {
@@ -606,8 +607,8 @@ const BiometricVerifyPage = () => {
     } else {
       setIsVerifying(true);
       setVerificationCount(0);
-      setFrameCount(0);
-      setFramesSkipped(0);
+      setFramesSent(0);
+      setFramesSkippedQuality(0);
       setResult(null);
       startStreaming();
     }
@@ -677,6 +678,66 @@ const BiometricVerifyPage = () => {
               <Box className={classes.iconFeature}>
                 <CheckCircleIcon />
                 <Typography>Real-time streaming verification</Typography>
+              </Box>
+
+              {/* Insuree Details - Moved from right panel */}
+              <Box style={{ marginTop: 32, paddingTop: 24, borderTop: "1px solid rgba(255,255,255,0.2)" }}>
+                <Typography style={{ fontSize: "0.85rem", marginBottom: 12, opacity: 0.8, textTransform: "uppercase", letterSpacing: 1 }}>
+                  Beneficiary Information
+                </Typography>
+
+                <TextField
+                  variant="outlined"
+                  label="Insuree UUID"
+                  value={insureeUuid}
+                  onChange={(e) => setInsureeUuid(e.target.value)}
+                  inputProps={{ autoComplete: "off", spellCheck: false }}
+                  disabled={isVerifying}
+                  size="small"
+                  fullWidth
+                  style={{ marginBottom: 12 }}
+                  sx={{
+                    "& .MuiInputBase-root": { background: "rgba(255,255,255,0.15)", color: "#fff" },
+                    "& .MuiInputLabel-root": { color: "rgba(255,255,255,0.8)" },
+                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.3)" },
+                    "& .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline": {
+                      borderColor: "rgba(255,255,255,0.5)",
+                    },
+                    "& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline": {
+                      borderColor: "#fff",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#fff",
+                    },
+                    "& input": { color: "#fff" }
+                  }}
+                />
+
+                <TextField
+                  variant="outlined"
+                  label="Claim Code (optional)"
+                  value={claimCode}
+                  onChange={(e) => setClaimCode(e.target.value)}
+                  inputProps={{ autoComplete: "off", spellCheck: false }}
+                  disabled={isVerifying}
+                  size="small"
+                  fullWidth
+                  sx={{
+                    "& .MuiInputBase-root": { background: "rgba(255,255,255,0.15)", color: "#fff" },
+                    "& .MuiInputLabel-root": { color: "rgba(255,255,255,0.8)" },
+                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(255,255,255,0.3)" },
+                    "& .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline": {
+                      borderColor: "rgba(255,255,255,0.5)",
+                    },
+                    "& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline": {
+                      borderColor: "#fff",
+                    },
+                    "& .MuiInputLabel-root.Mui-focused": {
+                      color: "#fff",
+                    },
+                    "& input": { color: "#fff" }
+                  }}
+                />
               </Box>
             </Grid>
 
@@ -801,9 +862,50 @@ const BiometricVerifyPage = () => {
                     {/* Verification Stats */}
                     {isVerifying && (
                       <Box style={{ marginTop: 8, fontSize: "0.85rem", textAlign: "center", color: "#006273" }}>
-                        <div>Sent: {frameCount}</div>
-                        <div>Skipped: {framesSkipped}</div>
+                        <div>Sent: {framesSent}</div>
+                        <div>Skipped: {framesSkippedQuality + Math.max(0, framesSent - verificationCount)}</div>
                         <div>Verified: {verificationCount}</div>
+                      </Box>
+                    )}
+
+                    {/* Verification Result - Moved inside Identity Verification column */}
+                    {result && (
+                      <Box
+                        className={resultClass()}
+                        style={{
+                          marginTop: 12,
+                          padding: 12,
+                          borderRadius: 8,
+                          textAlign: "center",
+                          fontSize: "0.9rem"
+                        }}
+                      >
+                        <Box style={{ fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                          {result.error ? (
+                            <>
+                              <CancelIcon fontSize="small" />
+                              <span>Error</span>
+                            </>
+                          ) : result.verified ? (
+                            <>
+                              <CheckCircleIcon fontSize="small" />
+                              <span>Verified</span>
+                            </>
+                          ) : (
+                            <>
+                              <CancelIcon fontSize="small" />
+                              <span>Not Verified</span>
+                            </>
+                          )}
+                        </Box>
+                        {result.error && (
+                          <Box style={{ fontSize: "0.75rem", marginTop: 4 }}>{result.error}</Box>
+                        )}
+                        {!result.error && result.confidence != null && (
+                          <Box style={{ fontSize: "0.75rem", marginTop: 4 }}>
+                            {result.confidence.toFixed(1)}%
+                          </Box>
+                        )}
                       </Box>
                     )}
                   </Box>
@@ -818,17 +920,6 @@ const BiometricVerifyPage = () => {
                   {cameraError}
                 </Typography>
               )}
-
-              <TextField
-                className={classes.input}
-                variant="outlined"
-                label="Insuree UUID"
-                value={insureeUuid}
-                onChange={(e) => setInsureeUuid(e.target.value)}
-                inputProps={{ autoComplete: "off", spellCheck: false }}
-                disabled={isVerifying}
-                size="medium"
-              />
 
               <Box className={classes.buttonGroup}>
                 {!isVerifying ? (
@@ -854,39 +945,6 @@ const BiometricVerifyPage = () => {
                   </Button>
                 )}
               </Box>
-
-              {result && (
-                <Paper className={`${classes.result} ${resultClass()}`} elevation={0}>
-                  <Typography variant="h6" style={{ fontWeight: 600, marginBottom: 8 }}>
-                    {result.error ? (
-                      <>
-                        <CancelIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
-                        Error
-                      </>
-                    ) : result.verified ? (
-                      <>
-                        <CheckCircleIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
-                        Identity Verified
-                      </>
-                    ) : (
-                      <>
-                        <CancelIcon style={{ verticalAlign: "middle", marginRight: 8 }} />
-                        Identity Not Verified
-                      </>
-                    )}
-                  </Typography>
-                  {result.error && (
-                    <Typography className={classes.detail}>{result.error}</Typography>
-                  )}
-                  {!result.error && result.confidence != null && (
-                    <Typography className={classes.detail}>
-                      Confidence: {result.confidence.toFixed(1)}% · Provider: {result.provider}
-                      <br />
-                      Total verifications: {verificationCount}
-                    </Typography>
-                  )}
-                </Paper>
-              )}
             </Grid>
           </Grid>
         </Box>
