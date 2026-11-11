@@ -23,8 +23,8 @@
     "@openimis/fe-core": "*",
     "@mui/material": "^7.0.0",
     "@mui/styles": "^6.0.0",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
+    "react": ">=18.2.0",
+    "react-dom": ">=18.2.0",
     "react-intl": "^6.0.0",
     "react-helmet": "*"
   },
